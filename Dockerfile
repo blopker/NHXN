@@ -10,5 +10,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl1.1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /root/
-COPY --from=builder /usr/src/app/nhxn .
+COPY --from=builder /usr/src/app/ .
 CMD ["./nhxn"]
