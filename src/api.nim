@@ -26,7 +26,6 @@ type
     score*: int
     title*: string
     descendants*: int
-    comments*: seq[Comment]
 
 # {
 #   "by" : "norvig",
@@ -45,53 +44,70 @@ type
     time*: int
     comments*: seq[Comment]
 
-let cache = newLRUCache[int, JsonNode](10000) 
-var stories: seq[Story] = @[]
+var cache {.threadvar.}: LruCache[int, JsonNode]
+var stories {.threadvar.}: seq[Story]
 
-proc httpGet(id: int): Future[JsonNode] {.async, gcsafe.} =
-    if id in cache:
-        return cache[id]
-    var client = newAsyncHttpClient()
-    let json = parseJson(await client.getContent(&"https://hacker-news.firebaseio.com/v0/item/{id}.json"))
-    client.close()
-    cache[id] = json
-    return json
+proc fetchItem(id: int): Future[JsonNode] {.async.} =
+  if isNil(cache):
+    cache = newLRUCache[int, JsonNode](10000) 
+  if id in cache and not isNil(cache[id]) :
+    return cache[id]
+  var client = newAsyncHttpClient()
+  let json = parseJson(await client.getContent(&"https://hacker-news.firebaseio.com/v0/item/{id}.json"))
+  client.close()
+  # echo json
+  cache[id] = json
+  return json
 
-proc getComment(id: int): Future[Comment] {.async.} =
-    var json = await httpGet(id)
-    if json{"deleted"}.getBool(false):
+proc getComment(id: int): Future[Comment] {.async, gcsafe.} =
+    let json = await fetchItem(id)
+    if isNil(json) or json{"deleted"}.getBool(false):
         return Comment()
     let kids = json{"kids"}.getElems().map((x) => x.getInt())
     let comments = await all(kids.map(getComment))
-    echo json
-    return Comment(id: json["id"].getInt(), by: json["by"].getStr(), kids: kids, comments: comments, time: json["time"].getInt(), text: json["text"].getStr())
+    # echo json
+    try:
+      return Comment(id: json["id"].getInt(), by: json["by"].getStr(), kids: kids, comments: comments, time: json["time"].getInt(), text: json["text"].getStr())
+    except:
+      echo json
 
-proc fetchStory(id: int): Future[Story] {.async.} =
-    var json = await httpGet(id)
-    let kids = json{"kids"}.getElems().map((x) => x.getInt())
-    let comments = await all(kids.map(getComment))
-    return Story(id: json["id"].getInt(), by: json["by"].getStr(), 
-        time: json["time"].getInt(), kids: kids,
-        url: json["url"].getStr(), score: json["score"].getInt(), title: json["title"].getStr(),
-        descendants: json{"descendants"}.getInt(0), comments: comments)
-
-proc fetchStories*(): Future[seq[Story]] {.async.} =
+proc getStoriesJson(): Future[seq[JsonNode]] {.async.} = 
   var client = newAsyncHttpClient()
   let storyIDs = to(parseJson(
       await client.getContent("https://hacker-news.firebaseio.com/v0/topstories.json")), 
       seq[int])
   client.close()
-  return await all(storyIDs[0..29].map(fetchStory))
+  var storiesJson = await all(storyIDs[0..29].map(fetchItem))
+  storiesJson = storiesJson.filter((x) => x["type"].getStr() == "story")
+  return storiesJson
 
-proc getStories*(): seq[Story] {.gcsafe.} = stories
+proc createStory(json: JsonNode): Story =
+  let kids = json{"kids"}.getElems().map((x) => x.getInt())
+  return Story(id: json["id"].getInt(), by: json["by"].getStr(), 
+        time: json["time"].getInt(), kids: kids,
+        url: json{"url"}.getStr(""), score: json["score"].getInt(), title: json["title"].getStr(),
+        descendants: json{"descendants"}.getInt(0))
+
+proc fetchStories*(): Future[seq[Story]] {.async.} =
+  let storiesJson = await getStoriesJson()
+  return storiesJson.map(createStory)
+
+proc getStories*(): seq[Story] = stories
 
 proc getStory*(id: int): Future[Story] {.async.} = 
-    return await fetchStory(id)
+  let json = await fetchItem(id)
+  return createStory(json)
 
-proc apiListen*() {.async.} = 
+proc getComments*(story: Story): Future[seq[Comment]] {.async.} =
+  return await all(story.kids.map(getComment))
+
+proc apiListen*() {.async.} =
     while true:
         echo "get stories"
         stories = await fetchStories()
+        for story in stories:
+          # just prime cache
+          asyncCheck getComments(story)
         await sleepAsync(30*1000)
 
 proc main() {.async.} = 

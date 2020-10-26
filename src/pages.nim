@@ -97,7 +97,7 @@ proc child(comment: Comment): Vnode =
 #         {{ end }}
 #     </div>
 # </div>
-proc storyPage*(story: Story): string =
+proc storyPage*(story: Story, comments: seq[Comment]): string =
   let vnode = buildHtml(tdiv()):
     tdiv:
       tdiv(class = "comment-header"):
@@ -106,7 +106,7 @@ proc storyPage*(story: Story): string =
         tdiv(class = "comment-header-author"): text &"By: {story.by}"
         # tdiv(class = "text"): text story.text
       tdiv(class = "comments"):
-        for comment in story.comments:
+        for comment in comments:
           tdiv: child(comment)
 
   result = base($vnode)
