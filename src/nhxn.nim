@@ -1,6 +1,7 @@
 import prologue
 import prologue/middlewares/staticfile
 import strutils
+import os
 from pages import indexPage, storyPage
 from api import getStories, apiListen, getStory, getComments
 
@@ -14,7 +15,7 @@ proc story*(ctx: Context) {.async.} =
   let comments = await getComments(story)
   resp storyPage(story, comments)
 
-let settings = newSettings(debug = true)
+let settings = newSettings(debug = true, port = Port(parseInt(getEnv("PORT", "8080"))))
 var app = newApp(settings)
 app.use(staticFileMiddleware("public"))
 app.addRoute("/", index)
